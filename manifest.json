@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "alexpazzo.deepseek-usage",
+  "name": "DeepSeek Usage",
+  "version": "1.2.1",
+  "author": "alexpazzo",
+  "license": "MIT",
+  "description": "Today's DeepSeek API spend, tokens, cache efficiency and balance from platform.deepseek.com/usage.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "DeepSeek Usage",
+    "description": "Today's DeepSeek spend in the bar; tokens, requests, cache hits, per-model and per-day totals, plus the official balance, in the panel.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "tokenFile": "~/.config/omarchy/deepseek-usage/token",
+      "tokenCommand": "",
+      "apiKeyFile": "",
+      "endpointBase": "https://platform.deepseek.com",
+      "balanceBase": "https://api.deepseek.com"
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 60,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "tokenFile",
+        "type": "path",
+        "label": "Session token file",
+        "defaultValue": "~/.config/omarchy/deepseek-usage/token",
+        "description": "File containing the platform web session token (localStorage.userToken)."
+      },
+      {
+        "key": "tokenCommand",
+        "type": "string",
+        "label": "Token command",
+        "defaultValue": "",
+        "description": "Optional. Runs via bash -c and prints the token; overrides the token file. Example: secret-tool lookup service deepseek."
+      },
+      {
+        "key": "apiKeyFile",
+        "type": "path",
+        "label": "API key file (balance)",
+        "defaultValue": "",
+        "description": "Optional. File containing a DeepSeek API key. Falls back to $DEEPSEEK_API_KEY. Empty hides the balance section."
+      },
+      {
+        "key": "endpointBase",
+        "type": "string",
+        "label": "Usage endpoint base",
+        "defaultValue": "https://platform.deepseek.com",
+        "description": "Advanced. Change only if the platform moves its usage API."
+      },
+      {
+        "key": "balanceBase",
+        "type": "string",
+        "label": "Balance endpoint base",
+        "defaultValue": "https://api.deepseek.com",
+        "description": "Advanced. Official API host for /user/balance."
+      }
+    ]
+  }
+}
