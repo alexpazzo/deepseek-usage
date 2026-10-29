@@ -11,7 +11,7 @@ import "Pricing.js" as Pricing
 
 // DeepSeek Usage bar widget: today's spend in the bar, usage/cost breakdown in
 // the panel. Two undocumented platform calls (amount + cost) feed Usage.js; the
-// optional balance call uses the official API key.
+// balance call reuses the same session token.
 Panel {
   id: root
 
@@ -49,25 +49,14 @@ Panel {
   readonly property string tokenPath: resolvePath(String(setting("tokenFile", "")),
     (Quickshell.env("XDG_CONFIG_HOME") || home + "/.config") + "/omarchy/deepseek-usage/token")
   readonly property string tokenCommand: String(setting("tokenCommand", ""))
-  readonly property string apiKeyPath: resolvePath(String(setting("apiKeyFile", "")), "")
   readonly property string endpointBase: String(setting("endpointBase", "https://platform.deepseek.com")).replace(/\/+$/, "")
-  readonly property string balanceBase: String(setting("balanceBase", "https://api.deepseek.com")).replace(/\/+$/, "")
   readonly property int refreshSec: Math.max(60, Math.min(3600, Number(setting("refreshIntervalSec", 300))))
-
-  // apiKeyText wins, then the environment. Both are normalised so a JSON blob
-  // copied out of a secret store still works.
-  readonly property string apiKey: {
-    var fromFile = Usage.normalizeToken(root.apiKeyText)
-    if (fromFile !== "") return fromFile
-    return Usage.normalizeToken(Quickshell.env("DEEPSEEK_API_KEY") || "")
-  }
 
   // --- state --------------------------------------------------------------
 
   property string state: "loading" // loading | ok | unconfigured | expired | error
   property string tokenText: ""
   property bool tokenLoaded: false
-  property string apiKeyText: ""
   property string activeToken: ""
   property string amountUrl: ""
   property string costUrl: ""
@@ -77,6 +66,7 @@ Panel {
   property var todayCounters: null
   property var weekCounters: null
   property var monthCounters: null
+  property string balanceBody: ""
   property var balance: null
   property string lastError: ""
   property real lastUpdated: 0
@@ -125,7 +115,7 @@ Panel {
     var query = "?start=" + start + "&end=" + end + "&tz=" + root.tzOffset
     root.amountUrl = root.endpointBase + "/api/v0/usage/by_api_key/amount" + query
     root.costUrl = root.endpointBase + "/api/v0/usage/by_api_key/cost" + query
-    root.balanceUrl = root.balanceBase + "/user/balance"
+    root.balanceUrl = root.endpointBase + "/api/v0/users/get_user_summary"
 
     root.amountBody = ""
     root.costBody = ""
@@ -140,7 +130,7 @@ Panel {
 
   function refreshBalance() {
     if (balanceProc.running) return
-    if (root.balanceUrl === "" || root.apiKey === "") {
+    if (root.balanceUrl === "" || root.activeToken === "") {
       root.balance = null
       return
     }
@@ -197,44 +187,16 @@ Panel {
     root.monthCounters = Usage.sumRange(next, root.keys)
     root.weekCounters = Usage.sumRange(next, root.keys.slice(-7))
     root.todayCounters = Usage.sumRange(next, [today])
+    root.applyBalance()
     root.lastUpdated = Date.now()
     root.lastError = ""
     root.state = "ok"
   }
 
-  // {is_available, balance_infos:[{currency,total_balance,granted_balance,topped_up_balance}]}
-  function applyBalance(text) {
-    var raw = String(text || "").trim()
-    if (raw === "") {
-      root.balance = null
-      return
-    }
-    var parsed = null
-    try {
-      parsed = JSON.parse(raw)
-    } catch (e) {
-      root.balance = null
-      return
-    }
-    var infos = parsed && parsed.balance_infos ? parsed.balance_infos : []
-    if (!infos.length) {
-      root.balance = null
-      return
-    }
-    var info = infos[0]
-    for (var i = 0; i < infos.length; i++) {
-      if (String(infos[i].currency || "").toUpperCase() === root.primaryCurrency) {
-        info = infos[i]
-        break
-      }
-    }
-    root.balance = {
-      currency: String(info.currency || "USD").toUpperCase(),
-      total: Number(info.total_balance) || 0,
-      granted: Number(info.granted_balance) || 0,
-      toppedUp: Number(info.topped_up_balance) || 0,
-      available: parsed.is_available !== false
-    }
+  // Platform summary: normal_wallets is the topped-up (paid) balance,
+  // bonus_wallets the granted one.
+  function applyBalance() {
+    root.balance = Usage.parseBalance(root.balanceBody, root.primaryCurrency)
   }
 
   // --- readouts -----------------------------------------------------------
@@ -331,14 +293,19 @@ Panel {
   Process {
     id: balanceProc
     command: ["bash", root.pluginDir + "/fetch.sh", root.balanceUrl]
-    environment: ({ DS_TOKEN: root.apiKey })
+    environment: ({ DS_TOKEN: root.activeToken })
     stdout: StdioCollector {
       id: balanceOut
       waitForEnd: true
     }
     onExited: function(exitCode) {
-      if (exitCode === 0) root.applyBalance(balanceOut.text)
-      else root.balance = null
+      if (exitCode === 0) {
+        root.balanceBody = balanceOut.text
+        root.applyBalance()
+      } else {
+        root.balanceBody = ""
+        root.balance = null
+      }
     }
   }
 
@@ -411,22 +378,6 @@ Panel {
     }
   }
 
-  FileView {
-    id: apiKeyView
-    path: root.apiKeyPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: {
-      root.apiKeyText = Usage.normalizeToken(text())
-      if (root.collected) root.refreshBalance()
-    }
-    onFileChanged: reload()
-    onLoadFailed: {
-      root.apiKeyText = ""
-      root.balance = null
-    }
-  }
-
   // --- bar ----------------------------------------------------------------
 
   implicitWidth: button.implicitWidth
@@ -479,8 +430,10 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: popup.fittedContentWidth(Style.space(340))
-    contentHeight: popup.fittedContentHeight(content.implicitHeight, Style.space(520))
+    contentWidth: popup.fittedContentWidth(Style.space(430))
+    // No fixed cap: the BALANCE section can push the content past a constant,
+    // and fittedContentHeight still clamps to the space the screen allows.
+    contentHeight: popup.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -510,6 +463,39 @@ Panel {
 
         Column {
           width: parent.width
+          visible: root.balance !== null
+          spacing: Style.spacing.labelGap
+
+          PanelSeparator {
+            foreground: root.foreground
+          }
+
+          PanelSectionHeader {
+            text: "BALANCE"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          InfoPair {
+            label: "Remaining"
+            hint: "total available"
+            value: root.balance !== null ? Usage.formatAmount(root.balance.total, root.balance.currency) : "\u2014"
+            valueColor: root.balance !== null && root.balance.total <= 0 ? root.urgent : root.foreground
+          }
+          InfoPair {
+            label: "Granted"
+            hint: "bonus credit"
+            value: root.balance !== null ? Usage.formatAmount(root.balance.granted, root.balance.currency) : "\u2014"
+          }
+          InfoPair {
+            label: "Topped up"
+            hint: "paid wallet"
+            value: root.balance !== null ? Usage.formatAmount(root.balance.toppedUp, root.balance.currency) : "\u2014"
+          }
+        }
+
+        Column {
+          width: parent.width
           spacing: Style.spacing.labelGap
 
           PanelSeparator {
@@ -524,19 +510,23 @@ Panel {
 
           InfoPair {
             label: "Status"
+            hint: "peak / off-peak"
             value: root.pricingStatusText
             valueColor: root.bandColor
           }
           InfoPair {
             label: "Next change (" + Pricing.formatOffset(root.localOffsetMinutes) + ")"
+            hint: "at the flip"
             value: root.pricingNextText
           }
           InfoPair {
             label: "Windows"
+            hint: "peak hours, UTC"
             value: root.pricingWindowsText
           }
           InfoPair {
             label: "Days"
+            hint: "peak weekdays"
             value: "Mon-Fri UTC"
           }
         }
@@ -596,23 +586,28 @@ Panel {
 
           InfoPair {
             label: "Cost"
+            hint: "billed today"
             value: Usage.formatCosts(root.todayCounters, root.primaryCurrency)
           }
           InfoPair {
             label: "Tokens"
+            hint: "input + output"
             value: Usage.formatTokens(Usage.tokens(root.todayCounters))
           }
           InfoPair {
             label: "In / out"
+            hint: "prompt / completion"
             value: Usage.formatTokens(Usage.inputTokens(root.todayCounters)) + " / "
               + Usage.formatTokens(root.todayCounters ? root.todayCounters.output : 0)
           }
           InfoPair {
             label: "Requests"
+            hint: "API calls"
             value: Usage.formatCount(root.todayCounters ? root.todayCounters.requests : 0)
           }
           InfoPair {
             label: "Cache hit rate"
+            hint: "of prompt tokens"
             value: Usage.formatPercent(Usage.cacheRate(root.todayCounters))
           }
         }
@@ -634,11 +629,13 @@ Panel {
 
           InfoPair {
             label: "Last 7 days"
+            hint: "spend \u00b7 tokens"
             value: Usage.formatCosts(root.weekCounters, root.primaryCurrency) + " \u00b7 "
               + Usage.formatTokens(Usage.tokens(root.weekCounters)) + " tokens"
           }
           InfoPair {
             label: "Last 30 days"
+            hint: "spend \u00b7 tokens"
             value: Usage.formatCosts(root.monthCounters, root.primaryCurrency) + " \u00b7 "
               + Usage.formatTokens(Usage.tokens(root.monthCounters)) + " tokens"
           }
@@ -667,37 +664,6 @@ Panel {
               value: Usage.formatCosts(modelData.counters, root.primaryCurrency) + " \u00b7 "
                 + Usage.formatTokens(Usage.tokens(modelData.counters))
             }
-          }
-        }
-
-        Column {
-          width: parent.width
-          visible: root.balance !== null
-          spacing: Style.spacing.labelGap
-
-          PanelSeparator {
-            foreground: root.foreground
-          }
-
-          PanelSectionHeader {
-            text: "BALANCE"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-          }
-
-          InfoPair {
-            label: "Remaining"
-            value: root.balance !== null ? Usage.formatAmount(root.balance.total, root.balance.currency) : "\u2014"
-            valueColor: root.balance !== null && (!root.balance.available || root.balance.total <= 0)
-              ? root.urgent : root.foreground
-          }
-          InfoPair {
-            label: "Granted"
-            value: root.balance !== null ? Usage.formatAmount(root.balance.granted, root.balance.currency) : "\u2014"
-          }
-          InfoPair {
-            label: "Topped up"
-            value: root.balance !== null ? Usage.formatAmount(root.balance.toppedUp, root.balance.currency) : "\u2014"
           }
         }
 
@@ -757,7 +723,11 @@ Panel {
   }
 
   component InfoPair: RowLayout {
+    id: pair
+
     property string label: ""
+    // One or two words on what the label measures, in a dimmer, smaller face.
+    property string hint: ""
     property string value: ""
     property color valueColor: root.foreground
 
@@ -765,7 +735,8 @@ Panel {
     spacing: Style.space(8)
 
     Text {
-      text: parent.label
+      id: labelText
+      text: pair.label
       color: root.foreground
       opacity: 0.6
       font.family: root.fontFamily
@@ -774,8 +745,19 @@ Panel {
 
     Text {
       Layout.fillWidth: true
-      text: parent.value
-      color: parent.valueColor
+      Layout.maximumWidth: Math.max(0, pair.width - labelText.implicitWidth - Style.space(120))
+      visible: pair.hint !== ""
+      text: pair.hint === "" ? "" : "(" + pair.hint + ")"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
+    }
+
+    Text {
+      Layout.fillWidth: true
+      text: pair.value
+      color: pair.valueColor
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
       elide: Text.ElideRight

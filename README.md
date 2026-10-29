@@ -1,15 +1,15 @@
 # DeepSeek Usage
 
 Omarchy bar widget for DeepSeek API usage: today's spend in the bar, and tokens,
-requests, cache-hit rate, 7/30-day totals, per-model costs and (optionally) the
-official account balance in the panel.
+requests, cache-hit rate, 7/30-day totals, per-model costs and the account
+balance in the panel.
 
 ## Requirements
 
 - Omarchy shell (Quickshell) with bar plugins.
 - `curl`.
-- A platform.deepseek.com account for usage data; a DeepSeek API key is optional
-  and only used for the balance.
+- A platform.deepseek.com account, signed in in the browser (the session token is
+  used for both usage and balance).
 
 ## Install
 
@@ -60,12 +60,15 @@ omarchy bar set alexpazzo.deepseek-usage tokenCommand 'secret-tool lookup servic
 omarchy bar set alexpazzo.deepseek-usage tokenCommand 'pass show deepseek/token'
 ```
 
-## Balance (optional)
+## Balance
 
-The panel can show the official balance from `GET https://api.deepseek.com/user/balance`.
-Either set `apiKeyFile` to a file containing an API key
-(<https://platform.deepseek.com/api_keys>), or export `DEEPSEEK_API_KEY` for the
-shell session. With neither, the balance section is hidden and usage still works.
+The panel shows the account balance from
+`GET {endpointBase}/api/v0/users/get_user_summary`, authorised by the same
+session token as usage. `Remaining` is the total available, `Granted` the
+free/bonus wallet and `Topped up` the paid wallet. No API key is needed. If the
+call fails, the section is hidden and the usage figures are unaffected.
+
+The balance is fetched on every refresh, in parallel with the two usage calls.
 
 ## Settings
 
@@ -76,18 +79,17 @@ Change them with `omarchy bar set alexpazzo.deepseek-usage <key> <value>`.
 | `refreshIntervalSec` | `300` | Polling interval, 60–3600 seconds. |
 | `tokenFile` | `~/.config/omarchy/deepseek-usage/token` | File holding the web session token. |
 | `tokenCommand` | empty | Optional command that prints the token; overrides `tokenFile`. |
-| `apiKeyFile` | empty | Optional file holding an API key for the balance call. |
-| `endpointBase` | `https://platform.deepseek.com` | Advanced: host of the usage API. |
-| `balanceBase` | `https://api.deepseek.com` | Advanced: host of `/user/balance`. |
+| `endpointBase` | `https://platform.deepseek.com` | Advanced: host of the platform API. |
 
 ## How it works
 
-Each refresh makes two calls to the platform's usage API — one for amounts, one
-for costs — for the last 30 local days:
+Each refresh makes three calls to the platform — two for usage (amounts and
+costs, last 30 local days) and one for the balance:
 
 ```
 GET {endpointBase}/api/v0/usage/by_api_key/amount?start=<sec>&end=<sec>&tz=<offset>
 GET {endpointBase}/api/v0/usage/by_api_key/cost?start=<sec>&end=<sec>&tz=<offset>
+GET {endpointBase}/api/v0/users/get_user_summary
 Authorization: Bearer <session token>
 ```
 

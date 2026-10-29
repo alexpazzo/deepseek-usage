@@ -215,6 +215,53 @@ function primaryCurrency(collected) {
   return best === "" ? "USD" : best
 }
 
+// Platform summary wallets: normal_wallets is the topped-up (paid) balance,
+// bonus_wallets is the granted balance. Both are lists of {currency, balance}.
+function walletBalance(wallets, currency) {
+  var list = Array.isArray(wallets) ? wallets : []
+  for (var i = 0; i < list.length; i++) {
+    var wallet = list[i] || {}
+    if (String(wallet.currency || "").toUpperCase() === currency) return num(wallet.balance)
+  }
+  return 0
+}
+
+function walletCurrency(data, preferred) {
+  var groups = [data && data.normal_wallets, data && data.bonus_wallets]
+  var want = trim(preferred).toUpperCase()
+  for (var g = 0; g < groups.length; g++) {
+    var list = Array.isArray(groups[g]) ? groups[g] : []
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].currency || "").toUpperCase() === want) return want
+    }
+  }
+  for (var g2 = 0; g2 < groups.length; g2++) {
+    var list2 = Array.isArray(groups[g2]) ? groups[g2] : []
+    for (var j = 0; j < list2.length; j++) {
+      var code = String(list2[j].currency || "").toUpperCase()
+      if (code !== "") return code
+    }
+  }
+  return want === "" ? "USD" : want
+}
+
+// {normal_wallets, bonus_wallets} -> {currency, total, granted, toppedUp}, or
+// null when the envelope is not a successful platform response.
+function parseBalance(text, preferredCurrency) {
+  var envelope = parseEnvelope(text)
+  if (!envelope.ok) return null
+  var data = envelope.data || {}
+  var currency = walletCurrency(data, preferredCurrency)
+  var toppedUp = walletBalance(data.normal_wallets, currency)
+  var granted = walletBalance(data.bonus_wallets, currency)
+  return {
+    currency: currency,
+    total: toppedUp + granted,
+    granted: granted,
+    toppedUp: toppedUp
+  }
+}
+
 function tokens(counters) {
   if (!counters) return 0
   return num(counters.cacheHit) + num(counters.cacheMiss) + num(counters.output)
@@ -335,6 +382,7 @@ if (typeof module !== "undefined") {
     collect: collect,
     sumRange: sumRange,
     primaryCurrency: primaryCurrency,
+    parseBalance: parseBalance,
     tokens: tokens,
     inputTokens: inputTokens,
     cacheRate: cacheRate,

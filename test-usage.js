@@ -199,4 +199,49 @@ assert.strictEqual(Usage.primaryCurrency({ currencies: { USD: 1.5, CNY: 9 } }), 
 assert.strictEqual(Usage.primaryCurrency({ currencies: {} }), "USD")
 assert.strictEqual(Usage.primaryCurrency(null), "USD")
 
+// --- balance ---------------------------------------------------------------
+
+function summary(normal, bonus) {
+  return JSON.stringify({
+    code: 0,
+    msg: "",
+    data: {
+      biz_code: 0,
+      biz_msg: "",
+      biz_data: { normal_wallets: normal, bonus_wallets: bonus, total_costs: [] }
+    }
+  })
+}
+
+assert.deepStrictEqual(
+  Usage.parseBalance(summary(
+    [{ currency: "USD", balance: "8.00" }],
+    [{ currency: "USD", balance: "1.50" }]
+  ), "USD"),
+  { currency: "USD", total: 9.5, granted: 1.5, toppedUp: 8 },
+  "topped-up is normal_wallets, granted is bonus_wallets, total is their sum"
+)
+assert.deepStrictEqual(
+  Usage.parseBalance(summary(
+    [{ currency: "CNY", balance: "100" }, { currency: "USD", balance: "8" }],
+    [{ currency: "CNY", balance: "5" }, { currency: "USD", balance: "2" }]
+  ), "USD"),
+  { currency: "USD", total: 10, granted: 2, toppedUp: 8 },
+  "preferred currency selects matching wallet entries"
+)
+assert.strictEqual(
+  Usage.parseBalance(summary(
+    [{ currency: "CNY", balance: "100" }],
+    [{ currency: "CNY", balance: "5" }]
+  ), "USD").currency,
+  "CNY",
+  "unknown preferred currency falls back to the first wallet currency"
+)
+assert.strictEqual(Usage.parseBalance("not json", "USD"), null)
+assert.strictEqual(
+  Usage.parseBalance(JSON.stringify({ code: 40003, msg: "Authorization Failed", data: null }), "USD"),
+  null,
+  "expired token yields no balance"
+)
+
 console.log("test-usage: all checks passed")
